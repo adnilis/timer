@@ -1,0 +1,4 @@
+github.com/adnilis/logger v1.0.1 h1:W8zeDal7DA5p+1fR1ii/bnrfTmjErC6rAoh7BGDvy3I=
+github.com/adnilis/logger v1.0.1/go.mod h1:iimIAzUu3JNPHcY93CEzOdb+bl9+P313fwm0cfr7rPs=
+github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=
+github.com/robfig/cron/v3 v3.0.1/go.mod h1:eQICP3HwyT7UooqI/z+Ov+PtYAWygg1TEWWzGIFLtro=
