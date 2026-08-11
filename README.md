@@ -35,12 +35,12 @@ import (
 )
 
 func main() {
-    // 在 1 秒后执行一次任务
+    // 每隔 1 秒执行一次任务
     id := timer.Add(1*time.Second, func() {
         fmt.Println("Hello, World!")
     })
 
-    // 取消定时器
+    // 不再需要时取消周期任务
     timer.Remove(id)
 }
 ```
@@ -86,20 +86,21 @@ func main() {
 ### 一次性定时
 
 ```go
-// 使用默认 Actor
-id := timer.Add(5*time.Second, func() {
+// 使用默认 Actor，在 5 秒后执行一次
+id := timer.Once(5*time.Second, func() {
     fmt.Println("5秒后执行一次")
-})
-
-// 或使用 Once（语义相同）
-id2 := timer.Once(5*time.Second, func() {
-    fmt.Println("也是5秒后执行一次")
 })
 ```
 
 ### 重复定时
 
 ```go
+// 每 5 秒执行一次；不再需要时显式取消
+id := timer.Add(5*time.Second, func() {
+    fmt.Println("每 5 秒执行一次")
+})
+defer timer.Remove(id)
+
 actor := timer.NewDefaultTimerActor(10*time.Millisecond, 60)
 actor.Start(10*time.Millisecond, 60)
 defer actor.Stop()
@@ -183,9 +184,9 @@ actor := timer.NewDefaultTimerActor(10*time.Millisecond, 60)
 actor.Start(10*time.Millisecond, 60)
 defer actor.Stop()
 
-// 添加定时器
+// 添加周期定时器
 id := actor.Add(1*time.Second, func() {
-    fmt.Println("任务执行")
+    fmt.Println("任务每秒执行一次")
 })
 
 // 取消定时器
@@ -202,7 +203,7 @@ actor.Start(5*time.Millisecond, 120)
 // 设置为默认 Actor
 timer.StartActor(actor)
 
-// 现在可以使用包级别函数
+// 现在可以使用包级别函数；任务会每秒执行一次
 timer.Add(1*time.Second, func() {
     fmt.Println("使用自定义 TimeWheel")
 })
@@ -212,13 +213,13 @@ timer.Add(1*time.Second, func() {
 
 ### 包级别函数
 
-#### `Add(delay time.Duration, fn func(), async ...bool) uint64`
+#### `Add(interval time.Duration, fn func(), async ...bool) uint64`
 
-调度一个在指定延迟后执行的一次性定时任务。
+调度一个按指定间隔重复执行的定时任务。间隔必须大于零；无效间隔返回 `0`。
 
 #### `Once(delay time.Duration, fn func(), async ...bool) uint64`
 
-调度一个在指定延迟后执行的一次性定时任务（Add 的别名）。
+调度一个在指定延迟后执行的一次性定时任务。
 
 #### `Remove(id uint64)`
 

@@ -16,7 +16,7 @@ func TestAddCronSchedule(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// 每 1 秒执行一次（使用 6 字段格式：秒 分 时 日 月 周）
-	wg.Add(2)
+	wg.Add(3)
 	id := AddCronSchedule("*/1 * * * * *", func() {
 		mu.Lock()
 		count++
@@ -43,7 +43,7 @@ func TestAddCronSchedule(t *testing.T) {
 	}
 
 	mu.Lock()
-	if count < 2 {
+	if count < 3 {
 		t.Fatalf("Expected at least 2 executions, got %d", count)
 	}
 	mu.Unlock()
@@ -124,7 +124,7 @@ func TestAddCronSchedule_Concurrent(t *testing.T) {
 	const numTimers = 10
 
 	// 并发添加多个 cron 定时器
-	for i := 0; i < numTimers; i++ {
+	for i := range numTimers {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

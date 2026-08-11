@@ -9,13 +9,14 @@ import (
 // TimerActor 定义定时器 Actor 的接口。
 // 它提供了调度和管理带有回调函数的定时器的方法。
 type TimerActor interface {
-	// Add 调度一个在指定延迟后执行的一次性定时任务。
+	// Add 调度一个按指定间隔重复执行的定时任务。
 	// 参数：
-	//   - delay: 执行任务前等待的时间
+	//   - interval: 每次执行之间的时间间隔，必须大于 0
 	//   - fn: 要执行的回调函数
 	//   - async: 是否异步执行回调（可选，默认为 false）
 	// 返回可用于删除定时器的定时器 ID。
-	Add(delay time.Duration, fn func(), async ...bool) uint64
+	// 如果 interval 无效，返回 0。
+	Add(interval time.Duration, fn func(), async ...bool) uint64
 
 	// AddSchedule 根据固定日期调度器调度一个重复执行的任务。
 	// 参数：
@@ -57,7 +58,6 @@ type TimerActor interface {
 	AddScheduleOnce(schedule *FixedDateSchedule, fn func(), async ...bool) uint64
 
 	// Once 调度一个在指定延迟后执行的一次性定时任务。
-	// 这是 Add 的别名，具有单次执行的语义。
 	// 参数：
 	//   - delay: 执行任务前等待的时间
 	//   - fn: 要执行的回调函数
@@ -154,14 +154,39 @@ func (a *DefaultTimerActor) Stop() {
 	a.cancel()
 }
 
-// Add 调度一个在指定延迟后执行的一次性定时任务。
+// Add 调度一个按指定间隔重复执行的定时任务。
+// 参数：
+//   - interval: 每次执行之间的时间间隔，必须大于 0
+//   - fn: 要执行的回调函数
+//   - async: 是否异步执行回调（可选，默认为 false）
+//
+// 返回可用于删除定时器的定时器 ID。
+// 如果 interval 无效，返回 0。
+func (a *DefaultTimerActor) Add(interval time.Duration, fn func(), async ...bool) uint64 {
+	if interval <= 0 {
+		return 0
+	}
+
+	a.ensureStarted()
+
+	id := NextId()
+	timer := a.tw.AddEveryFunc(id, interval, fn, async...)
+
+	a.mu.Lock()
+	a.timers[id] = timer
+	a.mu.Unlock()
+
+	return id
+}
+
+// Once 调度一个在指定延迟后执行的一次性定时任务。
 // 参数：
 //   - delay: 执行任务前等待的时间
 //   - fn: 要执行的回调函数
 //   - async: 是否异步执行回调（可选，默认为 false）
 //
 // 返回可用于删除定时器的定时器 ID。
-func (a *DefaultTimerActor) Add(delay time.Duration, fn func(), async ...bool) uint64 {
+func (a *DefaultTimerActor) Once(delay time.Duration, fn func(), async ...bool) uint64 {
 	a.ensureStarted()
 
 	id := NextId()
@@ -172,18 +197,6 @@ func (a *DefaultTimerActor) Add(delay time.Duration, fn func(), async ...bool) u
 	a.mu.Unlock()
 
 	return id
-}
-
-// Once 调度一个在指定延迟后执行的一次性定时任务。
-// 这是 Add 的别名，语义相同。
-// 参数：
-//   - delay: 执行任务前等待的时间
-//   - fn: 要执行的回调函数
-//   - async: 是否异步执行回调（可选，默认为 false）
-//
-// 返回可用于删除定时器的定时器 ID。
-func (a *DefaultTimerActor) Once(delay time.Duration, fn func(), async ...bool) uint64 {
-	return a.Add(delay, fn, async...)
 }
 
 // AddSchedule 根据固定日期调度器调度一个重复执行的任务。
@@ -367,24 +380,25 @@ func GetDefaultActor() TimerActor {
 	return getDefaultActor()
 }
 
-// Add 调度一个在指定延迟后执行的一次性定时任务。
+// Add 调度一个按指定间隔重复执行的定时任务。
 // 这是使用默认 Actor 的便捷函数。
 // 如果尚未设置默认 Actor，会自动创建一个 DefaultTimerActor。
 //
 // 参数：
-//   - delay: 执行任务前等待的时间
+//   - interval: 每次执行之间的时间间隔，必须大于 0
 //   - fn: 要执行的回调函数
 //   - async: 是否异步执行回调（可选，默认为 false）
 //
 // 返回可用于删除定时器的定时器 ID。
+// 如果 interval 无效，返回 0。
 //
 // 示例：
 //
 //	id := Add(1*time.Second, func() {
-//	    fmt.Println("1秒后执行")
+//	    fmt.Println("每秒执行一次")
 //	})
-func Add(delay time.Duration, fn func(), async ...bool) uint64 {
-	return GetDefaultActor().Add(delay, fn, async...)
+func Add(interval time.Duration, fn func(), async ...bool) uint64 {
+	return GetDefaultActor().Add(interval, fn, async...)
 }
 
 // AddSchedule 根据固定日期调度器调度一个重复执行的任务。
@@ -470,14 +484,15 @@ func AddScheduleOnce(schedule *FixedDateSchedule, fn func(), async ...bool) uint
 //	    fmt.Println("5秒后执行一次")
 //	})
 func Once(delay time.Duration, fn func(), async ...bool) uint64 {
-	return GetDefaultActor().Add(delay, fn, async...)
+	return GetDefaultActor().Once(delay, fn, async...)
 }
 
 // Remove 停止并删除具有指定 ID 的定时器。
 // 这是使用默认 Actor 的便捷函数。
 // 如果尚未设置默认 Actor，会自动创建一个 DefaultTimerActor。
 //
-// 如果定时器已经触发或不存在，此操作无效。
+// 如果定时器已经触发或不存在，此操作无效。对于周期定时器，
+// 调用后不会再调度后续执行。
 //
 // 示例：
 //

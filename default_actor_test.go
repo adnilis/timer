@@ -16,8 +16,8 @@ func TestDefaultAutoAutoCreate(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// 直接调用 Add，应该自动创建默认 actor
-	id := Add(100*time.Millisecond, func() {
+	// 直接调用 Once，应该自动创建默认 actor
+	id := Once(100*time.Millisecond, func() {
 		executed = true
 		wg.Done()
 	})
@@ -36,7 +36,7 @@ func TestDefaultAutoAutoCreate(t *testing.T) {
 
 	// 测试 Remove 功能
 	executed2 := false
-	id2 := Add(500*time.Millisecond, func() {
+	id2 := Once(500*time.Millisecond, func() {
 		executed2 = true
 	})
 
@@ -69,7 +69,7 @@ func TestDefaultTimerActor_Concurrent(t *testing.T) {
 	// 并发添加多个定时器
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
-		id := actor.Add(time.Duration(i+1)*10*time.Millisecond, func() {
+		id := actor.Once(time.Duration(i+1)*10*time.Millisecond, func() {
 			mu.Lock()
 			counter++
 			mu.Unlock()
@@ -86,6 +86,109 @@ func TestDefaultTimerActor_Concurrent(t *testing.T) {
 
 	if counter != 100 {
 		t.Fatalf("Expected 100 tasks, got %d", counter)
+	}
+}
+
+func TestDefaultTimerActor_AddRepeatsUntilRemoved(t *testing.T) {
+	actor := NewDefaultTimerActor(10*time.Millisecond, 60)
+	if err := actor.Start(10*time.Millisecond, 60); err != nil {
+		t.Fatalf("Failed to start actor: %v", err)
+	}
+	defer actor.Stop()
+
+	const interval = 20 * time.Millisecond
+	var mu sync.Mutex
+	count := 0
+	reached := make(chan struct{})
+
+	id := actor.Add(interval, func() {
+		mu.Lock()
+		defer mu.Unlock()
+
+		count++
+		if count == 3 {
+			close(reached)
+		}
+	})
+	if id == 0 {
+		t.Fatal("Expected non-zero timer ID")
+	}
+
+	select {
+	case <-reached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for repeated executions")
+	}
+
+	actor.Remove(id)
+
+	time.Sleep(3 * interval)
+	mu.Lock()
+	countAfterRemove := count
+	mu.Unlock()
+
+	time.Sleep(3 * interval)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if countAfterRemove < 3 {
+		t.Fatalf("Expected at least 3 executions before Remove, got %d", countAfterRemove)
+	}
+	if count != countAfterRemove {
+		t.Fatalf("Expected no executions after Remove, got %d then %d", countAfterRemove, count)
+	}
+}
+
+func TestDefaultTimerActor_OnceRunsOnce(t *testing.T) {
+	actor := NewDefaultTimerActor(10*time.Millisecond, 60)
+	if err := actor.Start(10*time.Millisecond, 60); err != nil {
+		t.Fatalf("Failed to start actor: %v", err)
+	}
+	defer actor.Stop()
+
+	const delay = 20 * time.Millisecond
+	var mu sync.Mutex
+	count := 0
+	fired := make(chan struct{})
+
+	id := actor.Once(delay, func() {
+		mu.Lock()
+		defer mu.Unlock()
+
+		count++
+		if count == 1 {
+			close(fired)
+		}
+	})
+	if id == 0 {
+		t.Fatal("Expected non-zero timer ID")
+	}
+
+	select {
+	case <-fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for one-time execution")
+	}
+
+	time.Sleep(4 * delay)
+	mu.Lock()
+	defer mu.Unlock()
+	if count != 1 {
+		t.Fatalf("Expected Once to execute exactly once, got %d", count)
+	}
+}
+
+func TestDefaultTimerActor_AddRejectsNonPositiveInterval(t *testing.T) {
+	actor := &DefaultTimerActor{}
+
+	for _, interval := range []time.Duration{0, -time.Millisecond} {
+		if id := actor.Add(interval, func() {}); id != 0 {
+			t.Fatalf("Expected invalid interval %s to return 0, got %d", interval, id)
+		}
+	}
+
+	if actor.tw != nil {
+		t.Fatal("Invalid Add interval should not start the actor")
 	}
 }
 
@@ -146,7 +249,7 @@ func TestStartActor_Nil(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	id := Add(100*time.Millisecond, func() {
+	id := Once(100*time.Millisecond, func() {
 		executed = true
 		wg.Done()
 	})
@@ -166,12 +269,12 @@ func TestStartActor_Nil(t *testing.T) {
 func TestDefaultTimerActor_EagerStart(t *testing.T) {
 	actor := &DefaultTimerActor{}
 
-	// 不显式调用 Start，直接调用 Add
+	// 不显式调用 Start，直接调用 Once
 	var executed bool
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	id := actor.Add(100*time.Millisecond, func() {
+	id := actor.Once(100*time.Millisecond, func() {
 		executed = true
 		wg.Done()
 	})
@@ -204,7 +307,7 @@ func TestDefaultTimerActor_Stop(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	id := actor.Add(100*time.Millisecond, func() {
+	id := actor.Once(100*time.Millisecond, func() {
 		executed = true
 		wg.Done()
 	})
@@ -256,14 +359,21 @@ func TestPackageLevelFunctions(t *testing.T) {
 		Second: 0,
 	}
 
-	var addCalled, onceCalled bool
-	var wg sync.WaitGroup
+	const interval = 20 * time.Millisecond
+	var mu sync.Mutex
+	var addCount, onceCount int
+	addRepeated := make(chan struct{})
+	onceExecuted := make(chan struct{})
 
-	// 测试 Add
-	wg.Add(1)
-	id1 := Add(100*time.Millisecond, func() {
-		addCalled = true
-		wg.Done()
+	// 测试 Add 的周期执行语义
+	id1 := Add(interval, func() {
+		mu.Lock()
+		defer mu.Unlock()
+
+		addCount++
+		if addCount == 2 {
+			close(addRepeated)
+		}
 	})
 
 	if id1 == 0 {
@@ -271,24 +381,53 @@ func TestPackageLevelFunctions(t *testing.T) {
 	}
 
 	// 测试 Once
-	wg.Add(1)
-	id2 := Once(100*time.Millisecond, func() {
-		onceCalled = true
-		wg.Done()
+	id2 := Once(interval, func() {
+		mu.Lock()
+		defer mu.Unlock()
+
+		onceCount++
+		if onceCount == 1 {
+			close(onceExecuted)
+		}
 	})
 
 	if id2 == 0 {
 		t.Fatal("Once failed")
 	}
 
-	wg.Wait()
+	select {
+	case <-addRepeated:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for Add to repeat")
+	}
 
-	if !addCalled {
-		t.Fatal("Add task not executed")
+	select {
+	case <-onceExecuted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for Once")
 	}
-	if !onceCalled {
-		t.Fatal("Once task not executed")
+
+	Remove(id1)
+	Remove(id2)
+
+	time.Sleep(3 * interval)
+	mu.Lock()
+	addCountAfterRemove := addCount
+	onceCountAfterRemove := onceCount
+	mu.Unlock()
+
+	time.Sleep(3 * interval)
+	mu.Lock()
+	if addCount < 2 {
+		t.Fatalf("Expected Add to execute at least twice, got %d", addCount)
 	}
+	if addCount != addCountAfterRemove {
+		t.Fatalf("Expected Add to stop after Remove, got %d then %d", addCountAfterRemove, addCount)
+	}
+	if onceCount != 1 || onceCountAfterRemove != 1 {
+		t.Fatalf("Expected Once to execute exactly once, got %d", onceCount)
+	}
+	mu.Unlock()
 
 	// 测试 AddScheduleOnce (不等待，只是验证能调用)
 	id3 := AddScheduleOnce(schedule, func() {
@@ -318,7 +457,7 @@ func TestPackageLevelFunctions(t *testing.T) {
 // TestDefaultActorExample 是一个使用示例，展示如何使用默认 actor
 func TestDefaultActorExample(t *testing.T) {
 	// 场景 1: 直接使用包级函数，无需显式设置
-	Add(50*time.Millisecond, func() {
+	Once(50*time.Millisecond, func() {
 		fmt.Println("任务 1 执行")
 	})
 
@@ -327,7 +466,7 @@ func TestDefaultActorExample(t *testing.T) {
 	actor.Start(5*time.Millisecond, 120)
 	defer actor.Stop()
 
-	actor.Add(50*time.Millisecond, func() {
+	actor.Once(50*time.Millisecond, func() {
 		fmt.Println("任务 2 执行")
 	})
 
